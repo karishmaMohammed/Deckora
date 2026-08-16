@@ -160,15 +160,3 @@ Run these in order, one session, from a fresh seed. Answer the agent the way a p
 
 For #3 in the recording I answer "Pricing Overview" if asked. For #10 I say there isn't one / never mind, and continue to #11.
 
-## Before you send
-
-1. `npm run reset-outline`, one session, all eleven, in order. Answer follow-up questions like a person.
-2. Paste the **real UI** into [TRANSCRIPT.md](TRANSCRIPT.md). If a turn broke, leave it in.
-3. Record 3–4 unedited minutes of that same run.
-4. GitHub later (private is fine). Do **not** commit `.env` — it is gitignored. Reviewers copy `.env.example`. Do not force-push. No extra tools, no Nest rewrite.
-
-## What to send
-
-- This repo
-- [TRANSCRIPT.md](TRANSCRIPT.md) — paste the eleven exchanges from the UI
-- A 3–4 minute unedited screen recording of the same run
