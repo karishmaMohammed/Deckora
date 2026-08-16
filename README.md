@@ -72,7 +72,7 @@ Descriptions are written for the model as the reader: when to call, when not to,
 
 I used snake_case names (`list_outline`, not `list-outline`). Both are fine; snake_case is what these models emit most reliably for function names.
 
-Positions are **final 1-based index after the operation**. "Move X to the end" with six items is position 6. "Right after Introduction" is Introduction's current position + 1 if X currently sits after it, or Introduction's position + 1 once you think in terms of the list you want. The agent is told to `list_outline` when it is not sure. The store clamps out-of-range positions and returns an error rather than wrapping.
+Positions are **final 1-based index after the operation**. "Move X to the end" with six items is position 6. "Right after Introduction" uses `move_item` with `after_id` of Introduction so a stale +1 from the original seed cannot put it at slot 2. The store clamps out-of-range numbered positions and returns an error rather than wrapping.
 
 ### Ambiguity is a first-class path
 
@@ -109,7 +109,7 @@ I considered WebSockets. SSE is enough for one-way agent output and simpler to p
 ### What I would do with more time
 
 1. Record traces (LangSmith) for the eleven-prompt session and keep a fixture of expected tool graphs, not expected wording.
-2. Tighten `create_outline` with a small Zod schema the model must fill, and retry once on validation failure instead of the JSON-parse fallback.
+2. If a provider still flakes on the nested `create_outline` tool call, add a second structured-output method behind a flag rather than letting the agent rebuild with `add_item`.
 3. If streaming of tool calls is thin on a given model, special-case the UI to still show `tool_start` immediately even when tokens never arrive.
 4. Add a "current outline" snapshot into the system prompt at the start of each turn so `list_outline` is not needed on every mutate. I did **not** do this on purpose: IDs and order would then live in two places (prompt vs file) and drift after a tool. Listing is slower and consistent.
 5. Show a short "why I asked" when the agent refuses to guess, so a reviewer who was not in my head can see the policy fire.

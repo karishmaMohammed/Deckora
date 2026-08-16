@@ -5,6 +5,7 @@ import {
   addItem,
   deleteItems,
   moveItem,
+  moveItemAfter,
   readOutline,
   replaceOutline,
   updateItem,
@@ -31,6 +32,21 @@ function fail(error: unknown, items?: PositionedItem[]): string {
   return JSON.stringify({ ok: false, error: message, ...current });
 }
 
+function messageText(message: { content: unknown }): string {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object" && "text" in part) {
+        return String((part as { text?: unknown }).text ?? "");
+      }
+      return "";
+    })
+    .join("");
+}
+
 function extractJsonObject(text: string): unknown {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -43,11 +59,26 @@ function extractJsonObject(text: string): unknown {
   return JSON.parse(candidate.slice(start, end + 1)) as unknown;
 }
 
+function itemsFromUnknown(value: unknown, itemCount: number): Array<{ title: string; description: string }> {
+  const parsed = generatedOutlineSchema.parse(value);
+  const items = parsed.items
+    .map((item) => ({
+      title: item.title.trim(),
+      description: item.description.trim(),
+    }))
+    .filter((item) => item.title.length > 0);
+  if (items.length < 1) {
+    throw new Error("Generated outline was empty.");
+  }
+  return items.slice(0, itemCount);
+}
+
 /**
- * create_outline must generate items with its own model call — not copy, not reuse
- * the agent loop. We ask for structured JSON and fall back to parsing free text.
+ * Nested model call inside create_outline — required by the spec (generate,
+ * don't copy). Forced tool call so we get real fields, not JS-style `{items:...}`
+ * which JSON.parse rejects at column 2.
  */
-async function generateOutlineItems(
+async function generateOutlineItemsOnce(
   topic: string,
   itemCount: number,
 ): Promise<Array<{ title: string; description: string }>> {
@@ -55,24 +86,48 @@ async function generateOutlineItems(
   const instruction = [
     "Generate a presentation outline from scratch.",
     `Topic: ${topic}`,
-    `Number of items: ${itemCount}`,
-    "Return JSON only, no markdown, of the form:",
-    '{"items":[{"title":"...","description":"..."}]}',
+    `Number of items: ${itemCount} (exactly that many).`,
     "Titles: 3–8 words, no numbering.",
     "Descriptions: one short sentence.",
     "Do not include an appendix unless the topic genuinely needs one.",
+    "Call submit_outline once with the items. Do not reply with JSON in the message text.",
   ].join("\n");
 
-  try {
-    const structured = model.withStructuredOutput(generatedOutlineSchema);
-    const result = await structured.invoke(instruction);
-    return result.items.slice(0, itemCount);
-  } catch {
-    const raw = await model.invoke(instruction);
-    const content = typeof raw.content === "string" ? raw.content : JSON.stringify(raw.content);
-    const parsed = generatedOutlineSchema.parse(extractJsonObject(content));
-    return parsed.items.slice(0, itemCount);
+  const submit = tool(
+    async (input: { items: Array<{ title: string; description: string }> }) => input,
+    {
+      name: "submit_outline",
+      description: "Submit the generated outline items.",
+      schema: generatedOutlineSchema,
+    },
+  );
+
+  const bound = model.bindTools([submit], { tool_choice: "submit_outline" });
+  const result = await bound.invoke(instruction);
+  const call =
+    result.tool_calls?.find((entry) => entry.name === "submit_outline") ??
+    result.tool_calls?.[0];
+  if (call?.args) {
+    return itemsFromUnknown(call.args, itemCount);
   }
+
+  return itemsFromUnknown(extractJsonObject(messageText(result)), itemCount);
+}
+
+async function generateOutlineItems(
+  topic: string,
+  itemCount: number,
+): Promise<Array<{ title: string; description: string }>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await generateOutlineItemsOnce(topic, itemCount);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`Could not generate outline items: ${message}`);
 }
 
 export const listOutlineTool = tool(
@@ -109,7 +164,7 @@ export const createOutlineTool = tool(
   {
     name: "create_outline",
     description:
-      "Wipe the current outline and generate a brand-new one from a topic. Items are produced by a separate model call, not copied. Use only when the user wants to start over on a new subject. Optional itemCount defaults to 6.",
+      "Wipe the current outline and generate a brand-new one from a topic. Items are produced by a separate model call inside this tool, not copied. This is the ONLY way to start over. Never approximate it by delete_item + add_item, and never paste JSON into the chat. Optional itemCount defaults to 6.",
     schema: z.object({
       topic: z
         .string()
@@ -193,9 +248,17 @@ export const updateItemTool = tool(
 );
 
 export const moveItemTool = tool(
-  async ({ id, position }) => {
+  async ({ id, position, after_id }) => {
     try {
-      const items = await moveItem(id, position);
+      if (after_id && position !== undefined) {
+        return fail("Pass either position or after_id, not both.");
+      }
+      if (!after_id && position === undefined) {
+        return fail("Pass position (1-based final index) or after_id (place immediately after that item).");
+      }
+      const items = after_id
+        ? await moveItemAfter(id, after_id)
+        : await moveItem(id, position!);
       return ok(items);
     } catch (error) {
       try {
@@ -209,14 +272,20 @@ export const moveItemTool = tool(
   {
     name: "move_item",
     description:
-      "Move an item so that its final 1-based position is `position`. Example: moving the last item to position 1 puts it at the top; moving an item to the current length puts it at the end.",
+      "Move an item. For 'to the top/end' or a numbered slot, pass `position` (final 1-based index; current length = end). For 'right after X', pass `after_id` of X — do not compute X's position plus one from an earlier turn. After a delete in this turn, read the delete result before moving.",
     schema: z.object({
       id: z.string().min(1).describe("Item id from list_outline."),
       position: z
         .number()
         .int()
         .min(1)
-        .describe("Final 1-based position after the move."),
+        .optional()
+        .describe("Final 1-based position after the move. Omit when using after_id."),
+      after_id: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Place this item immediately after this id. Preferred for 'right after X'."),
     }),
   },
 );
@@ -241,7 +310,7 @@ export const deleteItemTool = tool(
   {
     name: "delete_item",
     description:
-      "Remove one or more items by id. Pass every id in a single call. If the user's phrasing is ambiguous (two items could match), do not call this — ask them which one.",
+      "Remove one or more items by id. Call this only after the user's words uniquely identify the item(s). Pass several ids in one call only when they named each item (e.g. Market Landscape and Next Steps). If a singular phrase could match more than one title — especially 'the pricing slide' vs Pricing Overview and Pricing Details — do not call this tool; ask which one. Never delete every item that shares a word with the request.",
     schema: z.object({
       ids: z
         .array(z.string().min(1))

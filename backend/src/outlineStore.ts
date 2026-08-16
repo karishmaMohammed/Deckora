@@ -139,6 +139,32 @@ export async function moveItem(id: string, position: number): Promise<Positioned
   });
 }
 
+/** Place `id` immediately after `afterId` in the current file. Ignores stale numbers. */
+export async function moveItemAfter(id: string, afterId: string): Promise<PositionedItem[]> {
+  return withLock(async () => {
+    if (id === afterId) {
+      throw new Error("Cannot move an item after itself.");
+    }
+    const outline = await readUnlocked();
+    const from = outline.items.findIndex((entry) => entry.id === id);
+    if (from === -1) {
+      throw new Error(`No item with id "${id}".`);
+    }
+    const afterFrom = outline.items.findIndex((entry) => entry.id === afterId);
+    if (afterFrom === -1) {
+      throw new Error(`No item with id "${afterId}".`);
+    }
+    const [item] = outline.items.splice(from, 1);
+    if (!item) {
+      throw new Error(`No item with id "${id}".`);
+    }
+    const afterNow = outline.items.findIndex((entry) => entry.id === afterId);
+    outline.items.splice(afterNow + 1, 0, item);
+    await writeUnlocked(outline);
+    return withPositions(outline.items);
+  });
+}
+
 export async function deleteItems(ids: string[]): Promise<PositionedItem[]> {
   return withLock(async () => {
     const outline = await readUnlocked();

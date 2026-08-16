@@ -49,7 +49,7 @@ Six, no seventh:
 2. `create_outline` — `{ topic, itemCount? }` — nested model call, then replace file
 3. `add_item` — `{ title, description?, position? }`
 4. `update_item` — `{ id, title?, description? }`
-5. `move_item` — `{ id, position }` (final 1-based index)
+5. `move_item` — `{ id, position? }` or `{ id, after_id? }`
 6. `delete_item` — `{ ids: string[] }`
 
 DeepAgents built-ins (filesystem, todos, subagent `task`) are excluded via harness profile. See the root README for why.
