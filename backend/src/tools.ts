@@ -310,7 +310,7 @@ export const deleteItemTool = tool(
   {
     name: "delete_item",
     description:
-      "Remove one or more items by id. Call this only after the user's words uniquely identify the item(s). Pass several ids in one call only when they named each item (e.g. Market Landscape and Next Steps). If a singular phrase could match more than one title — especially 'the pricing slide' vs Pricing Overview and Pricing Details — do not call this tool; ask which one. Never delete every item that shares a word with the request.",
+      "Remove one or more items by id. Call this only after THIS user message uniquely identifies the item(s). Pass several ids only when they named each item in this message (e.g. Market Landscape and Next Steps). If you asked Overview vs Details last turn, do not delete both now unless they named both. A follow-up like 'Move Pricing Details…' is a move, not a delete. A bare number is one position, one id. Never complete an unanswered 'delete the pricing slide' by deleting every Pricing* item.",
     schema: z.object({
       ids: z
         .array(z.string().min(1))
